@@ -379,6 +379,10 @@ defmodule FLAME.Pool do
     :ets.lookup_element(name, :meta, 2)
   end
 
+  def metrics(name) do
+    GenServer.call(name, :metrics)
+  end
+
   @impl true
   def init(opts) do
     name = Keyword.fetch!(opts, :name)
@@ -499,6 +503,17 @@ defmodule FLAME.Pool do
     {:noreply, checkout_runner(state, deadline, from)}
   end
 
+  def handle_call(:metrics, _from, state) do
+    metrics = %{
+      runner_count: runner_count(state),
+      waiting_count: waiting_count(state),
+      pending_count: pending_count(state),
+      desired_count: desired_count(state)
+    }
+
+    {:reply, metrics, state}
+  end
+
   def runner_count(state) do
     map_size(state.runners)
   end
@@ -509,6 +524,11 @@ defmodule FLAME.Pool do
 
   def pending_count(state) do
     map_size(state.pending_runners)
+  end
+
+  def desired_count(state) do
+    {strategy_module, strategy_opts} = state.strategy
+    strategy_module.desired_count(state, strategy_opts)
   end
 
   defp replace_caller(%Pool{} = state, checkout_ref, caller_pid, [_ | _] = child_pids) do
