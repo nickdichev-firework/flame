@@ -30,6 +30,23 @@ defmodule FLAME.FLAMETest do
 
   @tag runner: [
          min: 1,
+         max: 1,
+         strategy: {Pool.PerRunnerMaxConcurrencyStrategy, max_concurrency: 1},
+         single_use: true
+       ]
+  test "runner is marked unschedulable after single use", %{runner_sup: runner_sup} = config do
+    [{:undefined, runner_pid, :worker, [FLAME.Runner]}] = Supervisor.which_children(runner_sup)
+
+    # Perform a call to use the runner
+    assert FLAME.call(config.test, fn -> :works end) == :works
+
+    # Check that the runner is marked as unschedulable
+    %{runners: runners} = :sys.get_state(config.test)
+    assert [%{pid: ^runner_pid, schedulable?: false, count: 0}] = Map.values(runners)
+  end
+
+  @tag runner: [
+         min: 1,
          max: 2,
          strategy: {Pool.PerRunnerMaxConcurrencyStrategy, max_concurrency: 2}
        ]
@@ -610,7 +627,7 @@ defmodule FLAME.FLAMETest do
     @tag runner: [
            min: 0,
            max: 1,
-           max_concurrency: 1,
+           strategy: {Pool.PerRunnerMaxConcurrencyStrategy, max_concurrency: 1},
            idle_shutdown_after: 100,
            track_resources: true
          ]

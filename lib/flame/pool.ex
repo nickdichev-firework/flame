@@ -2,7 +2,7 @@ defmodule FLAME.Pool.RunnerState do
   @moduledoc false
 
   @type t :: %__MODULE__{}
-  defstruct count: nil, pid: nil, monitor_ref: nil
+  defstruct count: nil, pid: nil, monitor_ref: nil, schedulable?: true
 end
 
 defmodule FLAME.Pool.WaitingState do
@@ -749,6 +749,23 @@ defmodule FLAME.Pool do
     new_state
     |> dec_runner_count(caller.runner_ref)
     |> call_next_waiting_caller()
+    |> maybe_mark_unschedulable(caller.runner_ref)
+  end
+
+  defp maybe_mark_unschedulable(%Pool{} = state, ref) do
+    # If the runner is single use, don't allow it to be rescheduled during the runner's async shutdown
+    single_use? = get_in(state, [Access.key(:runner_opts), :single_use])
+
+    if single_use? do
+      new_runners =
+        Map.update!(state.runners, ref, fn %RunnerState{} = runner ->
+          %RunnerState{runner | schedulable?: false}
+        end)
+
+      %Pool{state | runners: new_runners}
+    else
+      state
+    end
   end
 
   defp maybe_drop_waiting(%Pool{} = state, caller_pid) when is_pid(caller_pid) do
