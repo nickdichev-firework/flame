@@ -45,6 +45,39 @@ defmodule FLAME.FLAMETest do
     assert [%{pid: ^runner_pid, schedulable?: false, count: 0}] = Map.values(runners)
   end
 
+  defmodule AlwaysScaleStrategy do
+    @behaviour FLAME.Pool.Strategy
+    def checkout_runner(_state, _opts), do: [:scale]
+    def assign_waiting_callers(state, _runner, _pop, _reply, _opts), do: state
+    def desired_count(state, _opts), do: FLAME.Pool.runner_count(state) + 1
+    def has_unmet_servicable_demand?(_state, _strategy_opts), do: true
+  end
+
+  def on_grow_end_2(_result, _meta) do
+    send(:poll_unmet_demand_test, :grow_end)
+  end
+
+  @tag runner: [
+         min: 0,
+         max: 1,
+         strategy: {AlwaysScaleStrategy, []},
+         on_grow_end: &__MODULE__.on_grow_end_2/2
+       ]
+  test "Clients can scale the pool on demand if there is unmet demand",
+       %{runner_sup: runner_sup} = config do
+    Process.register(self(), :poll_unmet_demand_test)
+    [] = Supervisor.which_children(runner_sup)
+
+    # Our strategy defines that there is always demand on the pool
+    FLAME.Pool.poll_unmet_demand(config.test, :scale)
+
+    # The pool should scale
+    assert_receive :grow_end
+
+    assert [{:undefined, _runner_pid, :worker, [FLAME.Runner]}] =
+             Supervisor.which_children(runner_sup)
+  end
+
   @tag runner: [
          min: 1,
          max: 2,
