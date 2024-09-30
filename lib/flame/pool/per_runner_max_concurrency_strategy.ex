@@ -72,7 +72,7 @@ defmodule FLAME.Pool.PerRunnerMaxConcurrencyStrategy do
 
   @impl true
   def available_runners(state, _opts) do
-    state.runners
+    Enum.map(state.runners, fn {_ref, runner} -> runner end)
   end
 
   defp min_runner(pool) do
