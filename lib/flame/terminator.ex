@@ -103,26 +103,17 @@ defmodule FLAME.Terminator do
   # the DynamicSupervisor child inside the child placement supervisor, and notifies the
   # terminator via the {:placed_child, caller, child_pid} message.
   # This approach allows the caller to place the child outside of terminator, safely.
-  def start_child_inside_sup({mod, fun, args}, terminator, caller, link?, gl) do
-    # We switch the group leader, so that the newly started
-    # process gets the same group leader as the caller
-    initial_gl = Process.group_leader()
-    Process.group_leader(self(), gl)
+  def start_child_inside_sup({mod, fun, args}, terminator, caller, link?, _gl) do
+    {resp, pid} =
+      case apply(mod, fun, args) do
+        {:ok, pid} = resp -> {resp, pid}
+        {:ok, pid, _info} = resp -> {resp, pid}
+        resp -> {resp, nil}
+      end
 
-    try do
-      {resp, pid} =
-        case apply(mod, fun, args) do
-          {:ok, pid} = resp -> {resp, pid}
-          {:ok, pid, _info} = resp -> {resp, pid}
-          resp -> {resp, nil}
-        end
+    if pid, do: GenServer.call(terminator, {:placed_child, caller, pid, link?})
 
-      if pid, do: GenServer.call(terminator, {:placed_child, caller, pid, link?})
-
-      resp
-    after
-      Process.group_leader(self(), initial_gl)
-    end
+    resp
   end
 
   @impl true
