@@ -24,4 +24,7 @@ defmodule FLAME.Pool.Strategy do
   @callback desired_count(state :: Pool.t(), opts :: Keyword.t()) :: non_neg_integer()
 
   @callback has_unmet_servicable_demand?(state :: Pool.t(), opts :: Keyword.t()) :: boolean()
+
+  @callback available_runners(state :: Pool.t(), opts :: Keyword.t()) ::
+              list(Pool.RunnerState.t())
 end

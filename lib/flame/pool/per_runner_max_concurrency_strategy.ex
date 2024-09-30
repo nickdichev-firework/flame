@@ -2,8 +2,9 @@ defmodule FLAME.Pool.PerRunnerMaxConcurrencyStrategy do
   alias FLAME.Pool
   @behaviour FLAME.Pool.Strategy
 
+  @impl true
   def checkout_runner(%Pool{} = pool, opts) do
-    min_runner = min_runner(pool)
+    min_runner = pool |> available_runners(opts) |> min_runner()
     runner_count = Pool.runner_count(pool) + Pool.pending_count(pool)
     max_concurrency = Keyword.fetch!(opts, :max_concurrency)
 
@@ -24,6 +25,7 @@ defmodule FLAME.Pool.PerRunnerMaxConcurrencyStrategy do
     end
   end
 
+  @impl true
   def assign_waiting_callers(
         %Pool{} = pool,
         %Pool.RunnerState{} = runner,
@@ -57,13 +59,20 @@ defmodule FLAME.Pool.PerRunnerMaxConcurrencyStrategy do
     pool
   end
 
+  @impl true
   def desired_count(%Pool{} = pool, _opts) do
     Pool.runner_count(pool) + Pool.pending_count(pool) + 1
   end
 
+  @impl true
   def has_unmet_servicable_demand?(%Pool{} = pool, _opts) do
     runner_count = Pool.runner_count(pool) + Pool.pending_count(pool)
     Pool.waiting_count(pool) > 0 and runner_count < pool.max
+  end
+
+  @impl true
+  def available_runners(state, _opts) do
+    state.runners
   end
 
   defp min_runner(pool) do
