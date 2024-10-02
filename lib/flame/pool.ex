@@ -512,7 +512,8 @@ defmodule FLAME.Pool do
       runner_count: runner_count(state),
       waiting_count: waiting_count(state),
       pending_count: pending_count(state),
-      desired_count: desired_count(state)
+      desired_count: desired_count(state),
+      available_count: available_runners_count(state)
     }
 
     {:reply, metrics, state}
@@ -546,6 +547,12 @@ defmodule FLAME.Pool do
   def desired_count(state) do
     {strategy_module, strategy_opts} = state.strategy
     strategy_module.desired_count(state, strategy_opts)
+  end
+
+  def available_runners_count(state) do
+    {strategy_module, strategy_opts} = state.strategy
+    runners = strategy_module.available_runners(state, strategy_opts)
+    Enum.count(runners)
   end
 
   defp replace_caller(%Pool{} = state, checkout_ref, caller_pid, [_ | _] = child_pids) do
