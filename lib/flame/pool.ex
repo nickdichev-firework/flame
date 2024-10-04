@@ -387,6 +387,11 @@ defmodule FLAME.Pool do
     GenServer.call(name, :metrics)
   end
 
+  def reconfigure(name, opts) do
+    Keyword.validate!(opts, [:min, :max])
+    GenServer.call(name, {:reconfigure, Map.new(opts)})
+  end
+
   def poll_unmet_demand(name, :scale) do
     GenServer.call(name, {:poll_unmet_demand, :scale})
   end
@@ -511,18 +516,22 @@ defmodule FLAME.Pool do
     {:noreply, checkout_runner(state, deadline, from)}
   end
 
+  @impl true
   def handle_call(:metrics, _from, state) do
     metrics = %{
       runner_count: runner_count(state),
       waiting_count: waiting_count(state),
       pending_count: pending_count(state),
       desired_count: desired_count(state),
-      available_count: available_runners_count(state)
+      available_count: available_runners_count(state),
+      min: state.min,
+      max: state.max
     }
 
     {:reply, metrics, state}
   end
 
+  @impl true
   def handle_call({:poll_unmet_demand, :scale}, _from, state) do
     {strategy_module, strategy_opts} = state.strategy
 
@@ -533,6 +542,12 @@ defmodule FLAME.Pool do
         state
       end
 
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:reconfigure, opts}, _from, state) do
+    state = Map.merge(state, opts)
     {:reply, :ok, state}
   end
 

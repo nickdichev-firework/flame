@@ -329,6 +329,26 @@ defmodule FLAME.FLAMETest do
     end)
   end
 
+  describe "pool metrics" do
+    @tag runner: [
+           min: 1,
+           max: 2,
+           strategy: {Pool.PerRunnerMaxConcurrencyStrategy, max_concurrency: 2}
+         ]
+    test "the min and max can be dynamically set", config do
+      # Given
+      %{min: 1, max: 2} = FLAME.Pool.metrics(config.test)
+
+      # When
+      FLAME.Pool.reconfigure(config.test, min: 2, max: 3)
+      metrics = FLAME.Pool.metrics(config.test)
+
+      # Then
+      assert metrics.min == 2
+      assert metrics.max == 3
+    end
+  end
+
   describe "cast" do
     @tag runner: [
            min: 1,
