@@ -148,29 +148,33 @@ defmodule FLAME.Pool do
     * `:code_sync` – The optional list of options to enable copying and syncing code paths
       from the parent node to the runner node. Disabled by default. The options are:
 
-      * `:copy_paths` – If `true`, the pool will copy the code paths from the parent node
-        to the runner node on boot. Then any subsequent FLAME operation will sync code paths
-        from parent to child. Useful when you are starting an image that needs to run
-        dynamic code that is not available on the runner node. Defaults to `false`.
+      * `:start_apps` – Either a boolean or a list of specific OTP application names to start
+        when the runner boots. When `true`, all applications currently running on the parent node
+        are sent to the runner node to be started. Defaults to `false`. When set to `true`,
+        `copy_apps` will also be set to `true` if not explicitly set to `false`.
+
+      * `:copy_apps` – The boolean flag to copy all the application artifacts and their beam
+        files from the parent node to the runner node on boot. Defaults `false`.
+        When passing `start_apps: true`, automatically sets `copy_paths: true`.
+
+      * `:copy_paths` – The list of arbitrary paths to copy from the parent node to the runner
+        node on boot. Defaults to `[]`.
 
       * `:sync_beams` – A list of specific beam code paths to sync to the runner node. Useful
         when you want to sync specific beam code paths from the parent after sending all code
-        paths from `:copy_paths` on initial boot. For example, with `copy_paths: true`,
+        paths from `:copy_apps` on initial boot. For example, with `copy_apps: true`,
         and `sync_beams: ["/home/app/.cache/.../ebin"]`, all the code from the parent will be
         copied on boot, but only the specific beam files will be synced on subsequent calls.
-        With `copy_paths: false`, and `sync_beams: ["/home/app/.cache/.../ebin"]`,
+        With `copy_apps: false`, and `sync_beams: ["/home/app/.cache/.../ebin"]`,
         only the specific beam files will be synced on boot and for subsequent calls.
         Defaults to `[]`.
-
-      * `:start_apps` – Either a boolean or a list of specific OTP application names to start
-        when the runner boots. When `true`, all applications currently running on the parent node
-        are sent to the runner node to be started. Defaults to `false`.
 
       * `:verbose` – If `true`, the pool will log verbose information about the code sync process.
         Defaults to `false`.
 
-      * `:compress` – If `true`, the copy_paths and sync_beams will be compressed before sending.
-        Provides savings in network payload size at the cost of CPU time. Defaults to `false`.
+      * `:compress` – If `true`, the copy_apps, copy_paths, and sync_beams will be compressed
+        before sending. Provides savings in network payload size at the cost of CPU time.
+        Defaults to `true`.
 
       For example, in [Livebook](https://livebook.dev/), to start a pool with code sync enabled:
 
@@ -181,7 +185,6 @@ defmodule FLAME.Pool do
               name: :my_flame,
               code_sync: [
                 start_apps: true,
-                copy_paths: true,
                 sync_beams: [Path.join(System.tmp_dir!(), "livebook_runtime")]
               ],
               min: 1,
@@ -221,6 +224,7 @@ defmodule FLAME.Pool do
     ])
 
     Keyword.validate!(opts[:code_sync] || [], [
+      :copy_apps,
       :copy_paths,
       :sync_beams,
       :start_apps,
@@ -418,7 +422,7 @@ defmodule FLAME.Pool do
         code_sync =
           code_sync_opts
           |> CodeSync.new()
-          |> CodeSync.compute_copy_paths()
+          |> CodeSync.compute_changed_paths()
 
         %CodeSync.PackagedStream{} = parent_stream = CodeSync.package_to_stream(code_sync)
         parent_stream
@@ -555,30 +559,51 @@ defmodule FLAME.Pool do
     Enum.count(runners)
   end
 
+  defp await_downs(child_pids) do
+    if MapSet.size(child_pids) == 0 do
+      :ok
+    else
+      receive do
+        {:DOWN, _ref, :process, pid, _reason} -> await_downs(MapSet.delete(child_pids, pid))
+      end
+    end
+  end
+
   defp replace_caller(%Pool{} = state, checkout_ref, caller_pid, [_ | _] = child_pids) do
-    # replace caller with child pids and increase concurrency counts for the runner
+    # replace caller with child pid and do not inc concurrency counts since we are replacing
     %{^caller_pid => %Caller{checkout_ref: ^checkout_ref} = caller} = state.callers
     Process.demonitor(caller.monitor_ref, [:flush])
 
-    new_callers = Map.delete(state.callers, caller_pid)
+    # if we have more than 1 child pid, such as for multiple trackables returned for a single
+    # call, we monitor all of them under a new process and the new process takes the slot in the
+    # pool. When all trackables are finished, the new process goes down and frees the slot.
+    child_pid =
+      case child_pids do
+        [child_pid] ->
+          child_pid
+
+        [_ | _] ->
+          {:ok, child_pid} =
+            Task.Supervisor.start_child(state.task_sup, fn ->
+              Enum.each(child_pids, &Process.monitor(&1))
+              await_downs(MapSet.new(child_pids))
+            end)
+
+          child_pid
+      end
+
+    new_caller = %Caller{
+      checkout_ref: checkout_ref,
+      monitor_ref: Process.monitor(child_pid),
+      runner_ref: caller.runner_ref
+    }
 
     new_callers =
-      Enum.reduce(child_pids, new_callers, fn child_pid, acc ->
-        new_caller = %Caller{
-          checkout_ref: checkout_ref,
-          monitor_ref: Process.monitor(child_pid),
-          runner_ref: caller.runner_ref
-        }
+      state.callers
+      |> Map.delete(caller_pid)
+      |> Map.put(child_pid, new_caller)
 
-        Map.put(acc, child_pid, new_caller)
-      end)
-
-    inc_runner_count(
-      %Pool{state | callers: new_callers},
-      caller.runner_ref,
-      # subtract 1 because the caller we are replacing is already in the count
-      length(child_pids) - 1
-    )
+    %Pool{state | callers: new_callers}
   end
 
   defp checkin_runner(state, ref, caller_pid, reason)
@@ -731,10 +756,10 @@ defmodule FLAME.Pool do
     {runner, new_state}
   end
 
-  defp inc_runner_count(%Pool{} = state, ref, amount \\ 1) do
+  defp inc_runner_count(%Pool{} = state, ref) do
     new_runners =
       Map.update!(state.runners, ref, fn %RunnerState{} = runner ->
-        %RunnerState{runner | count: runner.count + amount}
+        %RunnerState{runner | count: runner.count + 1}
       end)
 
     %Pool{state | runners: new_runners}
