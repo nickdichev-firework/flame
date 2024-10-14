@@ -51,6 +51,9 @@ defmodule FLAME.FLAMETest do
     def assign_waiting_callers(state, _runner, _pop, _reply, _opts), do: state
     def desired_count(state, _opts), do: FLAME.Pool.runner_count(state) + 1
     def has_unmet_servicable_demand?(_state, _strategy_opts), do: true
+
+    def available_runners(state, _opts),
+      do: Enum.map(state.runners, fn {_ref, runner} -> runner end)
   end
 
   def on_grow_end_2(_result, _meta) do
