@@ -75,14 +75,11 @@ defmodule FLAME.Pool.PerRunnerMaxConcurrencyStrategy do
     Enum.map(state.runners, fn {_ref, runner} -> runner end)
   end
 
-  defp min_runner(pool) do
-    if map_size(pool.runners) == 0 do
+  defp min_runner(runners) do
+    if Enum.empty?(runners) do
       nil
     else
-      {_ref, min} =
-        Enum.min_by(pool.runners, fn {_, %Pool.RunnerState{count: count}} -> count end)
-
-      min
+      Enum.min_by(runners, fn %Pool.RunnerState{count: count} -> count end)
     end
   end
 end
