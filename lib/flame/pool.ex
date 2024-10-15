@@ -537,7 +537,7 @@ defmodule FLAME.Pool do
 
     state =
       if strategy_module.has_unmet_servicable_demand?(state, strategy_opts) do
-        async_boot_runner(state)
+        schedule_async_boot_runner(state)
       else
         state
       end
