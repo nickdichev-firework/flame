@@ -712,25 +712,20 @@ defmodule FLAME.Pool do
 
     current_count = runner_count(state) + pending_count(state)
     new_count = strategy_module.desired_count(state, strategy_opts)
-
     num_tasks = max(new_count - current_count, 0)
 
-    if num_tasks do
-      tasks =
-        for _ <- 1..num_tasks do
-          Task.Supervisor.async_nolink(state.task_sup, fn ->
-            if on_grow_start, do: on_grow_start.(%{count: new_count, name: name, pid: self()})
-            start_child_runner(state)
-          end)
-        end
+    tasks =
+      for _ <- 1..num_tasks//1 do
+        Task.Supervisor.async_nolink(state.task_sup, fn ->
+          if on_grow_start, do: on_grow_start.(%{count: new_count, name: name, pid: self()})
+          start_child_runner(state)
+        end)
+      end
 
-      pending_runners = Map.new(tasks, &{&1.ref, &1.pid})
-      new_pending = Map.merge(state.pending_runners, pending_runners)
+    pending_runners = Map.new(tasks, &{&1.ref, &1.pid})
+    new_pending = Map.merge(state.pending_runners, pending_runners)
 
-      %Pool{state | pending_runners: new_pending}
-    else
-      state
-    end
+    %Pool{state | pending_runners: new_pending}
   end
 
   defp start_child_runner(%Pool{} = state, runner_opts \\ []) do
