@@ -892,22 +892,20 @@ defmodule FLAME.Pool do
         %{} -> state
       end
 
-    state =
-      case pending_runners do
-        %{^ref => _} ->
-          %Pool{state | pending_runners: Map.delete(state.pending_runners, ref)}
-
-        %{} ->
+    case pending_runners do
+      %{^ref => _} ->
+        state = %Pool{state | pending_runners: Map.delete(state.pending_runners, ref)}
+        # we rate limit this to avoid many failed async boot attempts
+        if strategy_module.has_unmet_servicable_demand?(state, strategy_opts) do
           state
-      end
+          |> maybe_on_grow_end(pid, {:exit, reason})
+          |> schedule_async_boot_runner()
+        else
+          maybe_on_grow_end(state, pid, {:exit, reason})
+        end
 
-    if strategy_module.has_unmet_servicable_demand?(state, strategy_opts) do
-      # we rate limit this to avoid many failed async boot attempts
-      state
-      |> maybe_on_grow_end(pid, {:exit, reason})
-      |> schedule_async_boot_runner()
-    else
-      maybe_on_grow_end(state, pid, {:exit, reason})
+      %{} ->
+        state
     end
   end
 
