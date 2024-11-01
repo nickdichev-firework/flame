@@ -522,7 +522,6 @@ defmodule FLAME.Pool do
       runner_count: runner_count(state),
       waiting_count: waiting_count(state),
       pending_count: pending_count(state),
-      desired_count: desired_count(state),
       available_count: available_runners_count(state),
       min: state.min,
       max: state.max
