@@ -532,15 +532,7 @@ defmodule FLAME.Pool do
 
   @impl true
   def handle_call({:poll_unmet_demand, :scale}, _from, state) do
-    {strategy_module, strategy_opts} = state.strategy
-
-    state =
-      if strategy_module.has_unmet_servicable_demand?(state, strategy_opts) do
-        async_boot_runner(state)
-      else
-        state
-      end
-
+    state = async_boot_runner(state)
     {:reply, :ok, state}
   end
 
