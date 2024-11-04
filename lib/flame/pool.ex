@@ -522,7 +522,6 @@ defmodule FLAME.Pool do
       runner_count: runner_count(state),
       waiting_count: waiting_count(state),
       pending_count: pending_count(state),
-      desired_count: desired_count(state),
       available_count: available_runners_count(state),
       min: state.min,
       max: state.max
@@ -533,15 +532,7 @@ defmodule FLAME.Pool do
 
   @impl true
   def handle_call({:poll_unmet_demand, :scale}, _from, state) do
-    {strategy_module, strategy_opts} = state.strategy
-
-    state =
-      if strategy_module.has_unmet_servicable_demand?(state, strategy_opts) do
-        async_boot_runner(state)
-      else
-        state
-      end
-
+    state = async_boot_runner(state)
     {:reply, :ok, state}
   end
 
@@ -721,25 +712,20 @@ defmodule FLAME.Pool do
 
     current_count = runner_count(state) + pending_count(state)
     new_count = strategy_module.desired_count(state, strategy_opts)
-
     num_tasks = max(new_count - current_count, 0)
 
-    if num_tasks do
-      tasks =
-        for _ <- 1..num_tasks do
-          Task.Supervisor.async_nolink(state.task_sup, fn ->
-            if on_grow_start, do: on_grow_start.(%{count: new_count, name: name, pid: self()})
-            start_child_runner(state)
-          end)
-        end
+    tasks =
+      for _ <- 1..num_tasks//1 do
+        Task.Supervisor.async_nolink(state.task_sup, fn ->
+          if on_grow_start, do: on_grow_start.(%{count: new_count, name: name, pid: self()})
+          start_child_runner(state)
+        end)
+      end
 
-      pending_runners = Map.new(tasks, &{&1.ref, &1.pid})
-      new_pending = Map.merge(state.pending_runners, pending_runners)
+    pending_runners = Map.new(tasks, &{&1.ref, &1.pid})
+    new_pending = Map.merge(state.pending_runners, pending_runners)
 
-      %Pool{state | pending_runners: new_pending}
-    else
-      state
-    end
+    %Pool{state | pending_runners: new_pending}
   end
 
   defp start_child_runner(%Pool{} = state, runner_opts \\ []) do
@@ -892,22 +878,20 @@ defmodule FLAME.Pool do
         %{} -> state
       end
 
-    state =
-      case pending_runners do
-        %{^ref => _} ->
-          %Pool{state | pending_runners: Map.delete(state.pending_runners, ref)}
-
-        %{} ->
+    case pending_runners do
+      %{^ref => _} ->
+        state = %Pool{state | pending_runners: Map.delete(state.pending_runners, ref)}
+        # we rate limit this to avoid many failed async boot attempts
+        if strategy_module.has_unmet_servicable_demand?(state, strategy_opts) do
           state
-      end
+          |> maybe_on_grow_end(pid, {:exit, reason})
+          |> schedule_async_boot_runner()
+        else
+          maybe_on_grow_end(state, pid, {:exit, reason})
+        end
 
-    if strategy_module.has_unmet_servicable_demand?(state, strategy_opts) do
-      # we rate limit this to avoid many failed async boot attempts
-      state
-      |> maybe_on_grow_end(pid, {:exit, reason})
-      |> schedule_async_boot_runner()
-    else
-      maybe_on_grow_end(state, pid, {:exit, reason})
+      %{} ->
+        state
     end
   end
 
