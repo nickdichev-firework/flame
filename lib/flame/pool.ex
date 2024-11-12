@@ -53,6 +53,7 @@ defmodule FLAME.Pool do
             task_sup: nil,
             terminator_sup: nil,
             child_placement_sup: nil,
+            boot_max_concurrency: 10,
             boot_timeout: nil,
             idle_shutdown_after: nil,
             min_idle_shutdown_after: nil,
@@ -107,6 +108,9 @@ defmodule FLAME.Pool do
 
     * `:boot_timeout` - The time to allow for booting and connecting to a remote node.
       Defaults to 30 seconds.
+
+    * `:boot_max_concurrency` - The maximum number of concurrent booting runners.
+      Defaults to 10.
 
     * `:shutdown_timeout` - The time to allow for graceful shutdown on the remote node.
       Defaults to 30 seconds.
@@ -215,6 +219,7 @@ defmodule FLAME.Pool do
       :single_use,
       :timeout,
       :boot_timeout,
+      :boot_max_concurrency,
       :shutdown_timeout,
       :on_grow_start,
       :on_grow_end,
@@ -442,6 +447,7 @@ defmodule FLAME.Pool do
       min: min,
       max: Keyword.fetch!(opts, :max),
       boot_timeout: boot_timeout,
+      boot_max_concurrency: Keyword.get(opts, :boot_max_concurrency, 10),
       idle_shutdown_after: Keyword.get(opts, :idle_shutdown_after, @idle_shutdown_after),
       min_idle_shutdown_after: Keyword.get(opts, :min_idle_shutdown_after, :infinity),
       strategy: Keyword.get(opts, :strategy, @default_strategy),
@@ -682,7 +688,7 @@ defmodule FLAME.Pool do
       0..(state.min - 1)
       |> Task.async_stream(
         fn _ -> start_child_runner(state, idle_shutdown_after: state.min_idle_shutdown_after) end,
-        max_concurrency: 10,
+        max_concurrency: state.boot_max_concurrency,
         timeout: state.boot_timeout
       )
       |> Enum.reduce(state, fn
@@ -716,6 +722,7 @@ defmodule FLAME.Pool do
 
     tasks =
       for _ <- 1..num_tasks//1 do
+        # TODO: use boot_max_concurrency?
         Task.Supervisor.async_nolink(state.task_sup, fn ->
           if on_grow_start, do: on_grow_start.(%{count: new_count, name: name, pid: self()})
           start_child_runner(state)
