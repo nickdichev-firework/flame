@@ -56,8 +56,9 @@ defmodule FLAME.Pool do
             boot_max_concurrency: 10,
             boot_timeout: nil,
             idle_shutdown_after: nil,
-            min_idle_shutdown_after: nil,
             min: nil,
+            min_idle_shutdown_after: nil,
+            min_blocking_threshold: nil,
             max: nil,
             strategy: nil,
             callers: %{},
@@ -123,6 +124,9 @@ defmodule FLAME.Pool do
 
     * `:min_idle_shutdown_after` - The same behavior of `:idle_shutdown_after`, but applied
       to the the `:min` pool runners. Defaults to `:infinity`.
+
+    * `min_blocking_threshold` - The number of min runners that are booted while blocking the
+      parent application startup. Defaults to the value of `min`.
 
     * `:on_grow_start` - The optional function to be called when the pool starts booting a new
       runner beyond the configured `:min`. The function receives a map with the following metadata:
@@ -210,8 +214,9 @@ defmodule FLAME.Pool do
       :terminator_sup,
       :child_placement_sup,
       :idle_shutdown_after,
-      :min_idle_shutdown_after,
       :min,
+      :min_idle_shutdown_after,
+      :min_blocking_threshold,
       :max,
       :strategy,
       :backend,
@@ -450,6 +455,7 @@ defmodule FLAME.Pool do
       boot_max_concurrency: Keyword.get(opts, :boot_max_concurrency, 10),
       idle_shutdown_after: Keyword.get(opts, :idle_shutdown_after, @idle_shutdown_after),
       min_idle_shutdown_after: Keyword.get(opts, :min_idle_shutdown_after, :infinity),
+      min_blocking_threshold: Keyword.get(opts, :min_blocking_threshold, min),
       strategy: Keyword.get(opts, :strategy, @default_strategy),
       on_grow_start: opts[:on_grow_start],
       on_grow_end: opts[:on_grow_end],
