@@ -56,8 +56,9 @@ defmodule FLAME.Pool do
             boot_max_concurrency: 10,
             boot_timeout: nil,
             idle_shutdown_after: nil,
-            min_idle_shutdown_after: nil,
             min: nil,
+            min_idle_shutdown_after: nil,
+            min_blocking_threshold: nil,
             max: nil,
             strategy: nil,
             callers: %{},
@@ -123,6 +124,9 @@ defmodule FLAME.Pool do
 
     * `:min_idle_shutdown_after` - The same behavior of `:idle_shutdown_after`, but applied
       to the the `:min` pool runners. Defaults to `:infinity`.
+
+    * `min_blocking_threshold` - The number of min runners that are booted while blocking the
+      parent application startup. Defaults to the value of `min`.
 
     * `:on_grow_start` - The optional function to be called when the pool starts booting a new
       runner beyond the configured `:min`. The function receives a map with the following metadata:
@@ -210,8 +214,9 @@ defmodule FLAME.Pool do
       :terminator_sup,
       :child_placement_sup,
       :idle_shutdown_after,
-      :min_idle_shutdown_after,
       :min,
+      :min_idle_shutdown_after,
+      :min_blocking_threshold,
       :max,
       :strategy,
       :backend,
@@ -450,6 +455,7 @@ defmodule FLAME.Pool do
       boot_max_concurrency: Keyword.get(opts, :boot_max_concurrency, 10),
       idle_shutdown_after: Keyword.get(opts, :idle_shutdown_after, @idle_shutdown_after),
       min_idle_shutdown_after: Keyword.get(opts, :min_idle_shutdown_after, :infinity),
+      min_blocking_threshold: Keyword.get(opts, :min_blocking_threshold, min),
       strategy: Keyword.get(opts, :strategy, @default_strategy),
       on_grow_start: opts[:on_grow_start],
       on_grow_end: opts[:on_grow_end],
@@ -459,7 +465,7 @@ defmodule FLAME.Pool do
       base_sync_stream: base_sync_stream
     }
 
-    {:ok, boot_runners(state)}
+    {:ok, boot_min_runners(state)}
   end
 
   defp runner_opts(opts, terminator_sup) do
@@ -680,25 +686,37 @@ defmodule FLAME.Pool do
     %Pool{state | waiting: Queue.insert(state.waiting, waiting, pid)}
   end
 
-  defp boot_runners(%Pool{} = state) do
-    if state.min > 0 do
-      # start min runners, and do not idle them down regardless of idle configuration
-      # unless `:min_idle_shutdown_after` not infinity
-      # TODO: allow % threshold of failed min's to continue startup?
-      0..(state.min - 1)
-      |> Task.async_stream(
-        fn _ -> start_child_runner(state, idle_shutdown_after: state.min_idle_shutdown_after) end,
-        max_concurrency: state.boot_max_concurrency,
-        timeout: state.boot_timeout
-      )
-      |> Enum.reduce(state, fn
-        {:ok, {:ok, pid}}, acc ->
-          {_runner, new_acc} = put_runner(acc, pid)
-          new_acc
+  defp boot_min_runners(%Pool{on_grow_start: on_grow_start, name: name} = state) do
+    to_be_started = min(state.min, state.min_blocking_threshold)
 
-        {:exit, reason}, _acc ->
-          raise "failed to boot runner: #{inspect(reason)}"
-      end)
+    if on_grow_start, do: on_grow_start.(%{count: to_be_started, name: name, pid: self()})
+
+    # The min runners are special, we do not idle them down unless
+    # `:min_idle_shutdown_after` is not infinity
+    min_runner_opts = [idle_shutdown_after: state.min_idle_shutdown_after]
+
+    if to_be_started > 0 do
+      # TODO: allow % threshold of failed min's to continue startup?
+      state =
+        0..(to_be_started - 1)
+        |> Task.async_stream(fn _ -> start_child_runner(state, min_runner_opts) end,
+          max_concurrency: state.boot_max_concurrency,
+          timeout: state.boot_timeout
+        )
+        |> Enum.reduce(state, fn
+          {:ok, {:ok, pid}}, acc ->
+            {_runner, new_acc} = put_runner(acc, pid)
+            new_acc
+
+          {:exit, reason}, _acc ->
+            raise "failed to boot runner: #{inspect(reason)}"
+        end)
+
+      # We synchronously started the minimum amount of runers the pool wants to block
+      # the calling process for (which may have been the configured :min.
+      # Let's now check if there are any remaining runners which should start async.
+      # This is a noop if min == min_blocking_threshold.
+      async_boot_runner(state, count: state.min, runner_opts: min_runner_opts)
     else
       state
     end
@@ -713,25 +731,31 @@ defmodule FLAME.Pool do
     }
   end
 
-  defp async_boot_runner(%Pool{on_grow_start: on_grow_start, name: name} = state) do
-    {strategy_module, strategy_opts} = state.strategy
+  # Starts runners asynchronously as to not block the pool. Note that boot_max_concurrency
+  # does not bound the number of concurrent booting runners here.
+  defp async_boot_runner(%Pool{on_grow_start: on_grow_start, name: name} = state, opts \\ []) do
+    runner_opts = Keyword.get(opts, :runner_opts)
 
+    # :count should be the _total_ count you want to spawn, not the delta
+    new_count = Keyword.get_lazy(opts, :count, fn -> desired_count(state) end)
     current_count = runner_count(state) + pending_count(state)
-    new_count = strategy_module.desired_count(state, strategy_opts)
     num_tasks = max(new_count - current_count, 0)
 
+    # We need the Task.t() returned by async_nolink, we can't use async_stream which implements
+    # the :max_concurrency option, so we emulate it here.
     tasks =
       for _ <- 1..num_tasks//1 do
-        # TODO: use boot_max_concurrency?
         Task.Supervisor.async_nolink(state.task_sup, fn ->
           if on_grow_start, do: on_grow_start.(%{count: new_count, name: name, pid: self()})
-          start_child_runner(state)
+
+          if runner_opts,
+            do: start_child_runner(state, runner_opts),
+            else: start_child_runner(state)
         end)
       end
 
     pending_runners = Map.new(tasks, &{&1.ref, &1.pid})
     new_pending = Map.merge(state.pending_runners, pending_runners)
-
     %Pool{state | pending_runners: new_pending}
   end
 

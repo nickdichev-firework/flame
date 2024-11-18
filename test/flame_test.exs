@@ -21,11 +21,14 @@ defmodule FLAME.FLAMETest do
   end
 
   setup config do
-    runner_opts = Map.fetch!(config, :runner)
-    runner_sup = Module.concat(config.test, "RunnerSup")
-    pool_pid = start_supervised!({Pool, Keyword.merge(runner_opts, name: config.test)})
+    if runner_opts = Map.get(config, :runner) do
+      runner_sup = Module.concat(config.test, "RunnerSup")
+      pool_pid = start_supervised!({Pool, Keyword.merge(runner_opts, name: config.test)})
 
-    {:ok, runner_sup: runner_sup, pool_pid: pool_pid}
+      {:ok, runner_sup: runner_sup, pool_pid: pool_pid}
+    else
+      :ok
+    end
   end
 
   @tag runner: [
@@ -56,15 +59,15 @@ defmodule FLAME.FLAMETest do
       do: Enum.map(state.runners, fn {_ref, runner} -> runner end)
   end
 
-  def on_grow_end_2(_result, _meta) do
-    send(:poll_unmet_demand_test, :grow_end)
+  def poll_unmet_demand_grow_end(_result, _meta) do
+    maybe_send_to_named_process(:poll_unmet_demand_test, :grow_end)
   end
 
   @tag runner: [
          min: 0,
          max: 1,
          strategy: {AlwaysScaleStrategy, []},
-         on_grow_end: &__MODULE__.on_grow_end_2/2
+         on_grow_end: &__MODULE__.poll_unmet_demand_grow_end/2
        ]
   test "Clients can scale the pool on demand if there is unmet demand",
        %{runner_sup: runner_sup} = config do
@@ -115,6 +118,35 @@ defmodule FLAME.FLAMETest do
     assert new_pool == Supervisor.which_children(runner_sup)
   end
 
+  def min_blocking_threshold_grow_start(meta) do
+    maybe_send_to_named_process(:min_blocking_threshold, {:grow_start, meta})
+  end
+
+  test "boots the min_blocking_threshold runners before the remaining min runners", config do
+    runner_opts = [
+      min: 3,
+      min_blocking_threshold: 1,
+      max: 3,
+      on_grow_start: &__MODULE__.min_blocking_threshold_grow_start/1
+    ]
+
+    Process.register(self(), :min_blocking_threshold)
+
+    runner_sup = Module.concat(config.test, "RunnerSup")
+    start_supervised!({Pool, Keyword.merge(runner_opts, name: config.test)})
+
+    assert_receive {:grow_start, %{count: 1}}, 1000
+    assert_receive {:grow_start, %{count: 3}}, 1000
+
+    min_pool = Supervisor.which_children(runner_sup)
+
+    assert [
+             {:undefined, _, :worker, [FLAME.Runner]},
+             {:undefined, _, :worker, [FLAME.Runner]},
+             {:undefined, _, :worker, [FLAME.Runner]}
+           ] = min_pool
+  end
+
   @tag runner: [
          min: 0,
          max: 1,
@@ -144,15 +176,17 @@ defmodule FLAME.FLAMETest do
   end
 
   def on_grow_start(meta) do
-    send(:failure_test, {:grow_start, meta})
+    maybe_send_to_named_process(:failure_test, {:grow_start, meta})
 
-    if Agent.get_and_update(:failure_test_counter, &{&1 + 1, &1 + 1}) <= 1 do
-      raise "boom"
+    if Process.whereis(:failure_test_counter) do
+      if Agent.get_and_update(:failure_test_counter, &{&1 + 1, &1 + 1}) <= 1 do
+        raise "boom"
+      end
     end
   end
 
   def on_grow_end(result, meta) do
-    send(:failure_test, {:grow_start_end, result, meta})
+    maybe_send_to_named_process(:failure_test, {:grow_end, result, meta})
   end
 
   @tag runner: [
@@ -187,12 +221,12 @@ defmodule FLAME.FLAMETest do
       # first attempt fails
       refute_receive :fullfilled
       assert_receive {:grow_start, %{count: 2, pid: pid}}
-      assert_receive {:grow_start_end, {:exit, _}, %{pid: ^pid, count: 1}}
+      assert_receive {:grow_end, {:exit, _}, %{pid: ^pid, count: 1}}
       assert length(Supervisor.which_children(runner_sup)) == 1
 
       # retry attempt succeeds
       assert_receive {:grow_start, %{count: 2, pid: pid}}, 1000
-      assert_receive {:grow_start_end, :ok, %{pid: ^pid, count: 2}}
+      assert_receive {:grow_end, :ok, %{pid: ^pid, count: 2}}
       # queued og caller is now fullfilled from retried runner boot
       assert_receive :fullfilled
       assert FLAME.call(config.test, fn -> :works end) == :works
@@ -378,7 +412,7 @@ defmodule FLAME.FLAMETest do
     end
 
     def growth_grow_start(meta) do
-      send(Process.whereis(:current_test), {:grow_start, meta})
+      maybe_send_to_named_process(:pool_growth, {:grow_start, meta})
     end
 
     @tag runner: [
@@ -388,7 +422,7 @@ defmodule FLAME.FLAMETest do
            on_grow_start: &__MODULE__.growth_grow_start/1
          ]
     test "pool growth", %{} = config do
-      Process.register(self(), :current_test)
+      Process.register(self(), :pool_growth)
       parent = self()
 
       for i <- [1, 2, 3] do
@@ -753,6 +787,16 @@ defmodule FLAME.FLAMETest do
 
       # runner idles down
       assert_receive {:DOWN, _, _, ^runner, {:shutdown, :idle}}, 1000
+    end
+  end
+
+  # I added an on_grow_start call on the min runner boot, but the problem is that
+  # most tests which already exist spawn the pool before the named process which the
+  # on_grow_{start,end} functions are supposed to send messages to is spawned.
+  defp maybe_send_to_named_process(name, message) do
+    case Process.whereis(name) do
+      nil -> :ok
+      pid -> send(pid, message)
     end
   end
 end
