@@ -33,6 +33,7 @@ defmodule FLAME.Terminator do
             calls: %{},
             watchers: %{},
             log: false,
+            shutdown_on_parent_nodedown: true,
             status: nil,
             failsafe_timer: nil,
             connect_timer: nil,
@@ -63,9 +64,20 @@ defmodule FLAME.Terminator do
       before shutting down the system. Defaults to 2 seconds.
 
     * `:log` - The optional logging level. Defaults `false`.
+
+    * `:shutdown_on_parent_nodedown` - If the runner should terminate when the parent node goes down.
+      Defaults to `true`.
   """
   def start_link(opts) do
-    Keyword.validate!(opts, [:name, :parent, :child_placement_sup, :failsafe_timeout, :log])
+    Keyword.validate!(opts, [
+      :name,
+      :parent,
+      :child_placement_sup,
+      :failsafe_timeout,
+      :log,
+      :shutdown_on_parent_nodedown
+    ])
+
     GenServer.start_link(__MODULE__, opts, name: opts[:name])
   end
 
@@ -143,6 +155,7 @@ defmodule FLAME.Terminator do
           parent: parent,
           calls: %{},
           log: log,
+          shutdown_on_parent_nodedown: Keyword.get(opts, :shutdown_on_parent_nodedown, true),
           failsafe_timer: failsafe_timer,
           idle_shutdown_timer: {nil, nil}
         }
@@ -203,8 +216,11 @@ defmodule FLAME.Terminator do
     end
   end
 
-  def handle_info({:nodedown, who}, %Terminator{parent: parent} = state) do
-    if who === node(parent.pid) do
+  def handle_info(
+        {:nodedown, who},
+        %Terminator{parent: parent, shutdown_on_parent_nodedown: shutdown?} = state
+      ) do
+    if who === node(parent.pid) and shutdown? do
       new_state = system_stop(state, "nodedown #{inspect(who)}")
       {:noreply, new_state}
     else
