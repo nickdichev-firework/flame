@@ -10,8 +10,7 @@ defmodule FLAME.Runner.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       package: package(),
-      source_url: "https://github.com/phoenixframework/flame",
-      homepage_url: "http://www.phoenixframework.org",
+      source_url: "https://github.com/loopsocial/flame_fw",
       description: """
       Treat your entire application as a lambda, where modular parts can be executed on short-lived infrastructure.
       """
@@ -20,10 +19,10 @@ defmodule FLAME.Runner.MixProject do
 
   defp package do
     [
-      maintainers: ["Chris McCord", "Jason Stiebs"],
+      organization: "loopsocial",
       licenses: ["MIT"],
       links: %{
-        GitHub: "https://github.com/phoenixframework/flame"
+        GitHub: "https://github.com/loopsocial/flame_fw"
       },
       files: ~w(lib CHANGELOG.md LICENSE.md mix.exs README.md)
     ]
