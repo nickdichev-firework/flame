@@ -39,6 +39,8 @@ defmodule FLAME.Pool do
   """
   use GenServer
 
+  require Logger
+
   alias FLAME.{Pool, Runner, Queue, CodeSync}
   alias FLAME.Pool.{RunnerState, WaitingState, Caller}
 
@@ -344,6 +346,7 @@ defmodule FLAME.Pool do
           func.(runner_pid, remaining_timeout, track_resources)
         catch
           kind, reason ->
+            Logger.warning("inside catch caller_checkout!/5 reason: #{inspect(reason)}")
             send_cancel(pid, ref, :catch)
             :erlang.raise(kind, reason, __STACKTRACE__)
         else
@@ -352,11 +355,13 @@ defmodule FLAME.Pool do
             result
 
           {:cancel, reason, {result, [] = _trackable_pids}} ->
+            Logger.warning("inside else :cancel caller_checkout!/5 reason: #{inspect(reason)}")
             send_cancel(pid, ref, reason)
             result
         end
 
       {:DOWN, ^ref, _, _, reason} ->
+        Logger.warning("inside else :cancel caller_checkout!/5")
         exit({reason, {__MODULE__, fun_name, args}})
     after
       timeout ->
