@@ -890,6 +890,7 @@ defmodule FLAME.Pool do
   end
 
   defp handle_down(%Pool{} = state, {:DOWN, ref, :process, pid, reason}) do
+    Logger.info("got handle down for #{inspect(pid)} with reason #{inspect(reason)}")
     state = maybe_drop_waiting(state, pid)
 
     %{
