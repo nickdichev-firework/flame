@@ -642,8 +642,8 @@ defmodule FLAME.Pool do
         maybe_drop_waiting(state, caller_pid)
 
       %{} ->
-        raise ArgumentError,
-              "expected to checkin runner for #{inspect(caller_pid)} that does not exist"
+        Logger.info("Runner: #{inspect(caller_pid)}, went away -- maybe its draining")
+        state
     end
   end
 
