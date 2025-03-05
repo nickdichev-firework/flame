@@ -42,6 +42,8 @@ defmodule FLAME.Pool do
   alias FLAME.{Pool, Runner, Queue, CodeSync}
   alias FLAME.Pool.{RunnerState, WaitingState, Caller}
 
+  require Logger
+
   @default_strategy {Pool.PerRunnerMaxConcurrencyStrategy, [max_concurrency: 100]}
   @boot_timeout 30_000
   @idle_shutdown_after 30_000
