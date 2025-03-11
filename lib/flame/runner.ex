@@ -178,6 +178,11 @@ defmodule FLAME.Runner do
   def handle_info({:DOWN, ref, :process, pid, reason} = msg, state) do
     %{runner: %Runner{} = runner} = state
 
+    # If the monitored process went away with :noconnection, we want to prevent
+    # the GenServer terminate/2 callback from raising an error (since in our setup
+    # it likely indicates the remote worker is draining).
+    reason = if reason == :noconnection, do: {:shutdown, reason}, else: reason
+
     case runner do
       %Runner{terminator: ^pid} ->
         {:stop, reason, state}
